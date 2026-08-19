@@ -407,7 +407,7 @@
     </div>
     <div class="basket-visual" data-reveal id="heroBasketVisual">
       <div class="label-row">
-        <span class="title">CURRENT BASKET WEIGHTS</span>
+        <span class="title">TARGET BASKET WEIGHTS</span>
         <span class="title mono" id="heroBasketCount">— tokens</span>
       </div>
       <div class="bar" id="heroBar"></div>
@@ -534,7 +534,7 @@
       <h2>Basket holdings</h2>
     </div>
     <div class="basket-visual" style="margin-bottom:24px;" data-reveal>
-      <div class="label-row"><span class="title">INDEX BACKING — HELD IN CONTRACT</span></div>
+      <div class="label-row"><span class="title">ACTUAL BASKET WEIGHTS — HELD IN CONTRACT</span></div>
       <div class="bar" id="basketBarFull"></div>
       <div class="legend" id="basketLegendFull"></div>
     </div>
@@ -1021,26 +1021,25 @@ function renderBasketBars(){
   if (!basketCache) return;
   const { tokens, weights, symbols } = basketCache;
 
-  [ {bar:"heroBar", legend:"heroLegend"}, {bar:"basketBarFull", legend:"basketLegendFull"} ]
-  .forEach(({bar, legend})=>{
-    const barEl = document.getElementById(bar);
-    const legendEl = document.getElementById(legend);
-    barEl.innerHTML = ""; legendEl.innerHTML = "";
-    tokens.forEach((t,i)=>{
-      const pct = (weights[i]/100).toFixed(1);
-      const color = PALETTE[i % PALETTE.length];
-      const seg = document.createElement("div");
-      seg.className = "seg";
-      seg.style.background = color;
-      seg.innerHTML = `<span class="seg-tip">${symbols[i]} · ${pct}%</span>`;
-      barEl.appendChild(seg);
-      requestAnimationFrame(()=>{ seg.style.width = pct + "%"; });
+  // Hero bar only — shows the fixed TARGET allocation the contract buys
+  // toward on new deposits. This does not drift with market prices.
+  const barEl = document.getElementById("heroBar");
+  const legendEl = document.getElementById("heroLegend");
+  barEl.innerHTML = ""; legendEl.innerHTML = "";
+  tokens.forEach((t,i)=>{
+    const pct = (weights[i]/100).toFixed(1);
+    const color = PALETTE[i % PALETTE.length];
+    const seg = document.createElement("div");
+    seg.className = "seg";
+    seg.style.background = color;
+    seg.innerHTML = `<span class="seg-tip">${symbols[i]} · ${pct}%</span>`;
+    barEl.appendChild(seg);
+    requestAnimationFrame(()=>{ seg.style.width = pct + "%"; });
 
-      const li = document.createElement("div");
-      li.className = "legend-item";
-      li.innerHTML = `<span class="legend-swatch" style="background:${color}"></span>${symbols[i]} ${pct}%`;
-      legendEl.appendChild(li);
-    });
+    const li = document.createElement("div");
+    li.className = "legend-item";
+    li.innerHTML = `<span class="legend-swatch" style="background:${color}"></span>${symbols[i]} ${pct}%`;
+    legendEl.appendChild(li);
   });
 
   document.getElementById("heroBasketCount").textContent = tokens.length + " tokens";
@@ -1055,6 +1054,38 @@ function renderBasketBars(){
     seg.style.background = PALETTE[i % PALETTE.length];
     footBar.appendChild(seg);
     requestAnimationFrame(()=>{ seg.style.width = pct + "%"; });
+  });
+}
+
+// Backing section bar/legend — ACTUAL current weight by real value, not
+// the fixed target. Computed from each token's live PLS value, so it
+// reflects however far the basket has drifted from target since the
+// last time anyone deposited/redeemed/rebalanced.
+function renderActualBasketBar(rows, totalPlsValue){
+  const barEl = document.getElementById("basketBarFull");
+  const legendEl = document.getElementById("basketLegendFull");
+  if (!barEl || !legendEl) return;
+  barEl.innerHTML = ""; legendEl.innerHTML = "";
+
+  const totalNum = parseFloat(ethers.utils.formatUnits(totalPlsValue, 18));
+
+  rows.forEach((r, i)=>{
+    const valNum = parseFloat(ethers.utils.formatUnits(r.plsValue, 18));
+    const pct = totalNum > 0 ? (valNum / totalNum * 100) : 0;
+    const pctStr = pct.toFixed(1);
+    const color = PALETTE[i % PALETTE.length];
+
+    const seg = document.createElement("div");
+    seg.className = "seg";
+    seg.style.background = color;
+    seg.innerHTML = `<span class="seg-tip">${r.symbol} · ${pctStr}%</span>`;
+    barEl.appendChild(seg);
+    requestAnimationFrame(()=>{ seg.style.width = pctStr + "%"; });
+
+    const li = document.createElement("div");
+    li.className = "legend-item";
+    li.innerHTML = `<span class="legend-swatch" style="background:${color}"></span>${r.symbol} ${pctStr}%`;
+    legendEl.appendChild(li);
   });
 }
 
@@ -1129,6 +1160,8 @@ async function loadStats(){
 
     document.getElementById("statTreasuryPls").textContent = fmt(treasuryPls, 18, 0) + " PLS";
 
+    renderActualBasketBar(rows, basketTokensPlsValue);
+
     const plsUsd = await getPlsUsdPrice();
     redeemEstimateCache = { treasuryPls, totalSupply: supply, redeemFeeBps: redFee, plsUsd };
     updateRedeemEstimate();
@@ -1147,10 +1180,16 @@ async function loadStats(){
       const usdStr = plsUsd
         ? fmtUsd(parseFloat(ethers.utils.formatUnits(r.plsValue, 18)) * plsUsd)
         : "—";
+      // Actual weight — this token's real share of current basket value,
+      // not the fixed target from contract config. Computed from PLS
+      // values so it works even when the USD price fetch fails.
+      const actualPct = basketTokensPlsValue.gt(0)
+        ? (parseFloat(ethers.utils.formatUnits(r.plsValue, 18)) / parseFloat(ethers.utils.formatUnits(basketTokensPlsValue, 18)) * 100)
+        : 0;
       const tr = document.createElement("tr");
       tr.innerHTML = `
         <td><span class="tok"><span class="sw" style="background:${PALETTE[i%PALETTE.length]}"></span>${r.symbol}</span></td>
-        <td>${(r.weight/100).toFixed(1)}%</td>
+        <td>${actualPct.toFixed(1)}%</td>
         <td>${fmt(r.balance, r.decimals)}</td>
         <td>${usdStr}</td>`;
       tbody.appendChild(tr);
